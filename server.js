@@ -297,7 +297,25 @@ route('POST', '/api/import/:kind', async (req, res, params, body, user) => {
     return Number(await db.prepare(`INSERT INTO ${table} (user_id, name) VALUES (?, ?)`).run(user.id, n).lastInsertRowid);
   };
   const pick = (r, keys) => { for (const k of keys) { const v = r[k] ?? r[k.toLowerCase()] ?? r[k.toUpperCase()]; if (v !== undefined && v !== null && v !== '') return v; } return null; };
-  const toNum = (v) => { if (v === null || v === undefined || v === '') return NaN; const n = Number(String(v).replace(/\s/g,'').replace(/\./g,'').replace(',','.').replace(/[^\d.-]/g,'')); return Number.isFinite(n) ? n : NaN; };
+  const toNum = (v) => {
+    if (v === null || v === undefined || v === '') return NaN;
+    let s = String(v).trim().replace(/\s/g,'').replace(/[^\d.,-]/g,'');
+    const hasDot = s.includes('.'), hasComma = s.includes(',');
+    if (hasDot && hasComma) {
+      // last separator is decimal
+      if (s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(/\./g,'').replace(',', '.');
+      else s = s.replace(/,/g,'');
+    } else if (hasComma) {
+      s = s.replace(/\./g,'').replace(',', '.');
+    } else if (hasDot) {
+      // single dot: keep as decimal unless clearly thousands grouping like 1.234.567
+      const parts = s.split('.');
+      if (parts.length > 2) s = s.replace(/\./g,'');
+      // else keep dot as decimal
+    }
+    const n = Number(s);
+    return Number.isFinite(n) ? n : NaN;
+  };
   const toDate = (v) => {
     const s = String(v || '').trim();
     if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
