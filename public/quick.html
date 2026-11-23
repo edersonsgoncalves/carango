@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0097a7">
+  <title>Abastecimento rápido · Carango</title>
+  <style>
+    :root{--p:#0097a7;--bg:#f4f7f8;--card:#fff;--text:#243238;--muted:#607d8b;--border:#dce6ea;--danger:#d32f2f;--ok:#2e7d32}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{max-width:560px;margin:0 auto;padding:16px 14px 40px}
+    .head{display:flex;align-items:center;gap:10px;margin:8px 0 18px}
+    .logo{width:38px;height:38px;border-radius:10px;background:var(--p);color:#fff;display:grid;place-items:center;font-weight:800}
+    h1{font-size:20px;margin:0} .sub{color:var(--muted);font-size:13px;margin-top:2px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .full{grid-column:1/-1}
+    label{display:block;font-size:13px;font-weight:600;margin-bottom:5px;color:#37474f}
+    label .muted{font-weight:400;color:var(--muted)}
+    input,select{width:100%;padding:12px 12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:#fff}
+    input:focus,select:focus{outline:2px solid #b2ebf2;border-color:var(--p)}
+    .check{display:flex;gap:10px;align-items:center;padding:8px 0}
+    .check input{width:22px;height:22px}
+    .check label{margin:0;font-size:14px}
+    .btn{width:100%;padding:14px;border:0;border-radius:12px;background:var(--p);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+    .btn:disabled{opacity:.6}
+    .msg{padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:14px;display:none}
+    .msg.err{display:block;background:#ffebee;color:var(--danger)}
+    .msg.ok{display:block;background:#e8f5e9;color:var(--ok)}
+    .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+    .small{font-size:12px;color:var(--muted)}
+    a{color:var(--p)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <div class="logo">D</div>
+      <div><h1>Abastecimento rápido</h1><div class="sub" id="who">Carregando…</div></div>
+    </div>
+    <div id="msg" class="msg"></div>
+    <div class="card">
+      <form id="f">
+        <div class="grid">
+          <div class="full">
+            <label for="vehicle_id">Veículo</label>
+            <select id="vehicle_id" name="vehicle_id" required></select>
+          </div>
+          <div>
+            <label for="date">Data</label>
+            <input id="date" name="date" type="date" required>
+          </div>
+          <div>
+            <label for="odometer">Odômetro (km) <span class="muted" id="odo-last"></span></label>
+            <input id="odometer" name="odometer" type="number" step="0.1" min="0" inputmode="decimal" required>
+          </div>
+          <div>
+            <label for="volume">Volume (L)</label>
+            <input id="volume" name="volume" type="number" step="0.001" min="0" inputmode="decimal" placeholder="ex: 40.5">
+          </div>
+          <div>
+            <label for="price">Preço/L (R$)</label>
+            <input id="price" name="price" type="number" step="0.001" min="0" inputmode="decimal" placeholder="ex: 5.89">
+          </div>
+          <div>
+            <label for="total">Total (R$)</label>
+            <input id="total" name="total" type="number" step="0.01" min="0" inputmode="decimal" placeholder="auto">
+          </div>
+          <div>
+            <label for="fuel_id">Combustível</label>
+            <select id="fuel_id" name="fuel_id"><option value="">—</option></select>
+          </div>
+          <div class="full">
+            <label for="station_id">Posto</label>
+            <select id="station_id" name="station_id"><option value="">—</option></select>
+          </div>
+          <div class="full check">
+            <input id="full_tank" name="full_tank" type="checkbox" value="1">
+            <label for="full_tank">Tanque cheio</label>
+          </div>
+        </div>
+        <div style="height:14px"></div>
+        <button class="btn" type="submit" id="btn">Salvar abastecimento</button>
+      </form>
+    </div>
+    <p class="small" style="margin-top:14px;text-align:center">Dica: adicione esta página à tela inicial do celular. <a href="/" id="back">Abrir app completo</a></p>
+  </div>
+<script>
+const $ = (s) => document.querySelector(s);
+const msg = (t, kind='') => { const el = $('#msg'); el.className = 'msg ' + (kind||''); el.textContent = t; el.style.display = t ? 'block' : 'none'; };
+const params = new URLSearchParams(location.search);
+let token = params.get('token') || params.get('t') || localStorage.getItem('carango_quick_token') || '';
+if (params.get('token') || params.get('t')) { localStorage.setItem('carango_quick_token', token); history.replaceState(null, '', location.pathname); }
+if (!token) { msg('Token não encontrado. Abra pelo link gerado em Configurações > Abastecimento rápido no app.', 'err'); $('#f').style.display='none'; }
+
+async function api(path, opts={}) {
+  const res = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) } });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || `Erro ${res.status}`);
+  return data;
+}
+
+async function load() {
+  try {
+    const b = await api(`/api/quick/bootstrap?token=${encodeURIComponent(token)}`);
+    $('#who').textContent = b.user.name + ' · abastecimento rápido';
+    const vSel = $('#vehicle_id');
+    vSel.innerHTML = b.vehicles.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+    const fSel = $('#fuel_id');
+    b.fuels.forEach(f => { const o=document.createElement('option'); o.value=f.id; o.textContent=f.name; fSel.appendChild(o); });
+    const sSel = $('#station_id');
+    b.stations.forEach(s => { const o=document.createElement('option'); o.value=s.id; o.textContent=s.name; sSel.appendChild(o); });
+    $('#date').value = new Date().toISOString().slice(0,10);
+    vSel.addEventListener('change', updateOdo);
+    updateOdo();
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+async function updateOdo() {
+  const vid = $('#vehicle_id').value;
+  const hint = $('#odo-last');
+  if (!vid) { hint.textContent = ''; return; }
+  try {
+    const r = await api(`/api/last-odometer?vehicle_id=${vid}&token=${encodeURIComponent(token)}`);
+    hint.textContent = r.odometer != null ? `| Último: ${Number(r.odometer).toLocaleString('pt-BR')}` : '| Último: —';
+  } catch { hint.textContent = ''; }
+}
+
+const toNum = (el) => { const n = Number(el.value); return el.value !== '' && Number.isFinite(n) ? n : NaN; };
+function recalc(src) {
+  const v = toNum($('#volume')), p = toNum($('#price')), t = toNum($('#total'));
+  if (src !== 'total'  && Number.isFinite(v) && v>0 && Number.isFinite(p) && p>0) $('#total').value = (v*p).toFixed(2);
+  else if (src !== 'volume' && Number.isFinite(t) && t>0 && Number.isFinite(p) && p>0) $('#volume').value = (t/p).toFixed(3);
+  else if (src !== 'price'  && Number.isFinite(t) && t>0 && Number.isFinite(v) && v>0) $('#price').value = (t/v).toFixed(3);
+}
+$('#volume').addEventListener('input', () => recalc('volume'));
+$('#price').addEventListener('input', () => recalc('price'));
+$('#total').addEventListener('input', () => recalc('total'));
+
+$('#f').addEventListener('submit', async (e) => {
+  e.preventDefault(); msg('');
+  const btn = $('#btn'); btn.disabled = true;
+  try {
+    const body = {
+      vehicle_id: Number($('#vehicle_id').value),
+      date: $('#date').value,
+      odometer: Number($('#odometer').value),
+      volume: $('#volume').value === '' ? null : Number($('#volume').value),
+      price: $('#price').value === '' ? null : Number($('#price').value),
+      total: $('#total').value === '' ? null : Number($('#total').value),
+      fuel_id: $('#fuel_id').value ? Number($('#fuel_id').value) : null,
+      station_id: $('#station_id').value ? Number($('#station_id').value) : null,
+      full_tank: $('#full_tank').checked ? 1 : 0,
+    };
+    await api(`/api/quick/refueling?token=${encodeURIComponent(token)}`, { method:'POST', body: JSON.stringify(body) });
+    msg('Abastecimento salvo com sucesso!', 'ok');
+    $('#volume').value = ''; $('#price').value = ''; $('#total').value = ''; $('#full_tank').checked = false;
+    $('#odometer').value = '';
+    updateOdo();
+    window.scrollTo({top:0, behavior:'smooth'});
+  } catch (err) { msg(err.message, 'err'); }
+  finally { btn.disabled = false; }
+});
+
+load();
+</script>
+</body>
+</html>
