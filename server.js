@@ -348,33 +348,48 @@ route('POST', '/api/import/:kind', async (req, res, params, body, user) => {
         if (!Number.isFinite(volume) && Number.isFinite(total) && Number.isFinite(price) && price>0) volume = Number((total/price).toFixed(3));
         if (!Number.isFinite(price) && Number.isFinite(total) && Number.isFinite(volume) && volume>0) price = Number((total/volume).toFixed(3));
         if (!Number.isFinite(total)) total=0; if (!Number.isFinite(volume)) volume=0; if (!Number.isFinite(price)) price=0;
-        ins.run(user.id, vehicle.id, date, odometer, price, volume, total, toBool(pick(r,['full_tank','tanque_cheio','completo'])), findOrCreate('fuels', pick(r,['fuel','combustivel','combustível'])), findOrCreate('stations', pick(r,['station','posto'])), note(r));
+        const fuelId = await findOrCreate('fuels', pick(r,['fuel','combustivel','combustível']));
+        const stationId = await findOrCreate('stations', pick(r,['station','posto']));
+        await ins.run(user.id, vehicle.id, date, odometer, price, volume, total, toBool(pick(r,['full_tank','tanque_cheio','completo'])), fuelId, stationId, note(r));
       } else if (kind === 'expenses') {
         const date = toDate(pick(r,['date','data'])); const value = toNum(pick(r,['value','valor','total']));
         const title = String(pick(r,['title','titulo','título','descricao','descrição']) || 'Despesa').slice(0,200);
         if (!date || !Number.isFinite(value)) { errors.push(`Linha ${i+1}: data/valor inválido`); continue; }
         const odo = toNum(pick(r,['odometer','odometro','km'])); 
-        ins.run(user.id, vehicle.id, date, Number.isFinite(odo)?odo:null, title, value, findOrCreate('expense_types', pick(r,['type','tipo','categoria'])), findOrCreate('payment_methods', pick(r,['payment','pagamento','forma_pagamento'])), findOrCreate('places', pick(r,['place','local'])), findOrCreate('drivers', pick(r,['driver','motorista'])), note(r));
+        const expenseTypeId = await findOrCreate('expense_types', pick(r,['type','tipo','categoria']));
+        const paymentId = await findOrCreate('payment_methods', pick(r,['payment','pagamento','forma_pagamento']));
+        const placeId = await findOrCreate('places', pick(r,['place','local']));
+        const driverId = await findOrCreate('drivers', pick(r,['driver','motorista']));
+        await ins.run(user.id, vehicle.id, date, Number.isFinite(odo)?odo:null, title, value, expenseTypeId, paymentId, placeId, driverId, note(r));
       } else if (kind === 'services') {
         const date = toDate(pick(r,['date','data'])); const value = toNum(pick(r,['value','valor','total']));
         const title = String(pick(r,['title','titulo','título','descricao','descrição']) || 'Serviço').slice(0,200);
         if (!date || !Number.isFinite(value)) { errors.push(`Linha ${i+1}: data/valor inválido`); continue; }
         const odo = toNum(pick(r,['odometer','odometro','km']));
-        ins.run(user.id, vehicle.id, date, Number.isFinite(odo)?odo:null, title, value, findOrCreate('service_types', pick(r,['type','tipo','categoria'])), findOrCreate('payment_methods', pick(r,['payment','pagamento','forma_pagamento'])), findOrCreate('places', pick(r,['place','local'])), findOrCreate('drivers', pick(r,['driver','motorista'])), note(r));
+        const serviceTypeId = await findOrCreate('service_types', pick(r,['type','tipo','categoria']));
+        const paymentId = await findOrCreate('payment_methods', pick(r,['payment','pagamento','forma_pagamento']));
+        const placeId = await findOrCreate('places', pick(r,['place','local']));
+        const driverId = await findOrCreate('drivers', pick(r,['driver','motorista']));
+        await ins.run(user.id, vehicle.id, date, Number.isFinite(odo)?odo:null, title, value, serviceTypeId, paymentId, placeId, driverId, note(r));
       } else if (kind === 'incomes') {
         const date = toDate(pick(r,['date','data'])); const value = toNum(pick(r,['value','valor','total']));
         if (!date || !Number.isFinite(value)) { errors.push(`Linha ${i+1}: data/valor inválido`); continue; }
         const odo = toNum(pick(r,['odometer','odometro','km']));
-        ins.run(user.id, vehicle.id, date, Number.isFinite(odo)?odo:null, value, findOrCreate('income_types', pick(r,['type','tipo','categoria'])), note(r));
+        const incomeTypeId = await findOrCreate('income_types', pick(r,['type','tipo','categoria']));
+        await ins.run(user.id, vehicle.id, date, Number.isFinite(odo)?odo:null, value, incomeTypeId, note(r));
       } else if (kind === 'routes') {
         const date = toDate(pick(r,['start_date','date','data'])); const so = toNum(pick(r,['start_odometer','odometro_inicial','km_inicial']));
         if (!date || !Number.isFinite(so)) { errors.push(`Linha ${i+1}: data/odômetro inicial inválido`); continue; }
         const eo = toNum(pick(r,['end_odometer','odometro_final','km_final'])); const dv = toNum(pick(r,['distance_value','valor_km'])); const fv = toNum(pick(r,['freight_value','frete','valor_frete']));
-        ins.run(user.id, vehicle.id, findOrCreate('places', pick(r,['origin','origem'])), findOrCreate('places', pick(r,['destination','destino'])), date, toDate(pick(r,['end_date','data_fim'])) || date, so, Number.isFinite(eo)?eo:null, Number.isFinite(dv)?dv:0, Number.isFinite(fv)?fv:0, findOrCreate('drivers', pick(r,['driver','motorista'])), findOrCreate('reason_types', pick(r,['reason','motivo'])), note(r));
+        const originId = await findOrCreate('places', pick(r,['origin','origem']));
+        const destId = await findOrCreate('places', pick(r,['destination','destino']));
+        const driverId = await findOrCreate('drivers', pick(r,['driver','motorista']));
+        const reasonId = await findOrCreate('reason_types', pick(r,['reason','motivo']));
+        await ins.run(user.id, vehicle.id, originId, destId, date, toDate(pick(r,['end_date','data_fim'])) || date, so, Number.isFinite(eo)?eo:null, Number.isFinite(dv)?dv:0, Number.isFinite(fv)?fv:0, driverId, reasonId, note(r));
       } else if (kind === 'readings') {
         const date = toDate(pick(r,['date','data'])); const odometer = toNum(pick(r,['odometer','odometro','km','leitura']));
         if (!date || !Number.isFinite(odometer)) { errors.push(`Linha ${i+1}: data/odômetro inválido`); continue; }
-        ins.run(user.id, vehicle.id, date, odometer, note(r));
+        await ins.run(user.id, vehicle.id, date, odometer, note(r));
       }
       imported++;
     } catch (e) { errors.push(`Linha ${i+1}: ${e.message}`); }
@@ -610,7 +625,7 @@ route('GET', '/api/dashboard', async (req, res, params, body, user) => {
 
   const lastOdo = (await one(
     `SELECT max(odometer) o FROM (SELECT odometer FROM refuelings WHERE user_id = ? ${vFilter}
-      UNION ALL SELECT odometer FROM readings WHERE user_id = ? ${vFilter})`,
+      UNION ALL SELECT odometer FROM readings WHERE user_id = ? ${vFilter}) sub`,
     user.id, ...vArgs, user.id, ...vArgs
   )).o;
 
