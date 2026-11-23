@@ -1,12 +1,10 @@
 services:
-  carango-web:
+  carango:
     build: .
-    image: carango-web:1.0.0
+    image: carango:14.2.1
     container_name: carango-app
     restart: unless-stopped
     env_file:
       - .env
     ports:
       - "3210:3000"
-    volumes:
-      - ./data:/app/data

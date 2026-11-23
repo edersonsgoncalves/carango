@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const mysql = require('mysql2/promise');
 
 // tiny .env loader (no dependency)
 (() => {
@@ -18,20 +19,13 @@ const path = require('node:path');
   } catch {}
 })();
 
-const DRIVER = (process.env.DB_DRIVER || 'sqlite').toLowerCase();
-
-let _sqlite = null;
 let _pool = null;
 
 function normalizeRunResult(result) {
-  if (DRIVER === 'mysql') {
-    return { lastInsertRowid: Number(result.insertId || 0), changes: Number(result.affectedRows || 0) };
-  }
-  return { lastInsertRowid: Number(result.lastInsertRowid || 0), changes: Number(result.changes || 0) };
+  return { lastInsertRowid: Number(result.insertId || 0), changes: Number(result.affectedRows || 0) };
 }
 
 const db = {
-  driver: DRIVER,
   prepare(sql) {
     return {
       get: (...args) => db.get(sql, ...args),
@@ -40,185 +34,68 @@ const db = {
     };
   },
   async get(sql, ...args) {
-    if (DRIVER === 'mysql') {
-      const [rows] = await _pool.execute(sql, args);
-      return rows[0] || undefined;
-    }
-    return _sqlite.prepare(sql).get(...args);
+    const [rows] = await _pool.execute(sql, args);
+    return rows[0] || undefined;
   },
   async all(sql, ...args) {
-    if (DRIVER === 'mysql') {
-      const [rows] = await _pool.execute(sql, args);
-      return rows;
-    }
-    return _sqlite.prepare(sql).all(...args);
+    const [rows] = await _pool.execute(sql, args);
+    return rows;
   },
   async run(sql, ...args) {
-    if (DRIVER === 'mysql') {
-      const [result] = await _pool.execute(sql, args);
-      return normalizeRunResult(result);
-    }
-    return normalizeRunResult(_sqlite.prepare(sql).run(...args));
+    const [result] = await _pool.execute(sql, args);
+    return normalizeRunResult(result);
   },
   async exec(sql) {
-    if (DRIVER === 'mysql') {
-      const statements = sql.split(/;\s*\n/).map(s => s.trim()).filter(Boolean);
-      for (const st of statements) await _pool.query(st);
-      return;
-    }
-    _sqlite.exec(sql);
+    const statements = sql.split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
+    for (const st of statements) await _pool.query(st);
   },
 };
 
-async function init() {
-  if (DRIVER === 'mysql') {
-    const mysql = require('mysql2/promise');
-    const host = process.env.MYSQL_HOST || '127.0.0.1';
-    const port = Number(process.env.MYSQL_PORT || 3306);
-    const user = process.env.MYSQL_USER || 'root';
-    const password = process.env.MYSQL_PASSWORD || '';
-    const database = process.env.MYSQL_DATABASE || 'carango';
-
-    // ensure database exists
-    const admin = await mysql.createConnection({ host, port, user, password, multipleStatements: true });
-    await admin.query(`CREATE DATABASE IF NOT EXISTS \`${database.replace(/`/g,'``')}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    await admin.end();
-
-    _pool = mysql.createPool({
-      host, port, user, password, database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      charset: 'utf8mb4',
-      decimalNumbers: true,
-      dateStrings: true,
-    });
-    await ensureSchemaMySQL();
-  } else {
-    const { DatabaseSync } = require('node:sqlite');
-    const DB_PATH = process.env.DB_PATH || './data/carango.db';
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    _sqlite = new DatabaseSync(DB_PATH);
-    _sqlite.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-    await ensureSchemaSQLite();
+function requireEnv(name) {
+  const v = process.env[name];
+  if (v === undefined || String(v).trim() === '') {
+    throw new Error(`Variável de ambiente obrigatória ausente: ${name}`);
   }
+  return String(v);
+}
+
+async function init() {
+  const missing = ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE']
+    .filter((k) => process.env[k] === undefined || String(process.env[k]).trim() === '');
+  if (missing.length) {
+    throw new Error(`Credenciais MySQL ausentes no ambiente: ${missing.join(', ')}. Configure o .env.`);
+  }
+
+  const host = requireEnv('MYSQL_HOST');
+  const port = Number(requireEnv('MYSQL_PORT'));
+  const user = requireEnv('MYSQL_USER');
+  const password = process.env.MYSQL_PASSWORD;
+  const database = requireEnv('MYSQL_DATABASE');
+
+  if (!Number.isFinite(port) || port <= 0) {
+    throw new Error(`MYSQL_PORT inválido: ${process.env.MYSQL_PORT}`);
+  }
+
+  // ensure database exists
+  const admin = await mysql.createConnection({ host, port, user, password, multipleStatements: true });
+  await admin.query(`CREATE DATABASE IF NOT EXISTS \`${database.replace(/`/g, '``')}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  await admin.end();
+
+  _pool = mysql.createPool({
+    host, port, user, password, database,
+    waitForConnections: true,
+    connectionLimit: 10,
+    charset: 'utf8mb4',
+    decimalNumbers: true,
+    dateStrings: true,
+  });
+
+  await ensureSchema();
   await seedIfEmpty();
 }
 
 /* ---------- schema ---------- */
-async function ensureSchemaSQLite() {
-  await db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  name          TEXT NOT NULL,
-  email         TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  salt          TEXT NOT NULL,
-  quick_token   TEXT,
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS vehicles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, brand TEXT, model TEXT, year INTEGER, plate TEXT,
-  fuel_type TEXT NOT NULL DEFAULT 'Gasolina', tank_volume REAL NOT NULL DEFAULT 50,
-  odometer_unit INTEGER NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS fuels (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS stations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, address TEXT, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS places (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, address TEXT, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS payment_methods (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS expense_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS service_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS income_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS reason_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS drivers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS refuelings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  date TEXT NOT NULL, odometer REAL NOT NULL, price REAL NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 0,
-  total REAL NOT NULL DEFAULT 0, full_tank INTEGER NOT NULL DEFAULT 0, discount REAL NOT NULL DEFAULT 0,
-  fuel_id INTEGER REFERENCES fuels(id), station_id INTEGER REFERENCES stations(id),
-  payment_id INTEGER REFERENCES payment_methods(id), driver_id INTEGER REFERENCES drivers(id),
-  reason_id INTEGER REFERENCES reason_types(id), notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS expenses (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  date TEXT NOT NULL, odometer REAL, title TEXT NOT NULL, value REAL NOT NULL DEFAULT 0,
-  discount REAL NOT NULL DEFAULT 0, installments INTEGER NOT NULL DEFAULT 1,
-  expense_type_id INTEGER REFERENCES expense_types(id), payment_id INTEGER REFERENCES payment_methods(id),
-  place_id INTEGER REFERENCES places(id), driver_id INTEGER REFERENCES drivers(id),
-  reason_id INTEGER REFERENCES reason_types(id), notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS services (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  date TEXT NOT NULL, odometer REAL, title TEXT NOT NULL, value REAL NOT NULL DEFAULT 0,
-  discount REAL NOT NULL DEFAULT 0, installments INTEGER NOT NULL DEFAULT 1,
-  service_type_id INTEGER REFERENCES service_types(id), payment_id INTEGER REFERENCES payment_methods(id),
-  place_id INTEGER REFERENCES places(id), driver_id INTEGER REFERENCES drivers(id),
-  reason_id INTEGER REFERENCES reason_types(id), notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS incomes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  date TEXT NOT NULL, odometer REAL, value REAL NOT NULL DEFAULT 0, installments INTEGER NOT NULL DEFAULT 1,
-  income_type_id INTEGER REFERENCES income_types(id), notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS routes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  origin_id INTEGER REFERENCES places(id), destination_id INTEGER REFERENCES places(id),
-  start_date TEXT NOT NULL, end_date TEXT, start_odometer REAL NOT NULL, end_odometer REAL,
-  distance_value REAL NOT NULL DEFAULT 0, freight_value REAL NOT NULL DEFAULT 0,
-  driver_id INTEGER REFERENCES drivers(id), reason_id INTEGER REFERENCES reason_types(id),
-  notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS readings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  date TEXT NOT NULL, odometer REAL NOT NULL, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS reminders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL DEFAULT 'date', title TEXT NOT NULL, due_date TEXT, due_odometer REAL,
-  repeat_days INTEGER, repeat_km REAL, notes TEXT, active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  sid TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_refuel_veh ON refuelings(vehicle_id, date);
-CREATE INDEX IF NOT EXISTS idx_exp_veh    ON expenses(vehicle_id, date);
-CREATE INDEX IF NOT EXISTS idx_srv_veh    ON services(vehicle_id, date);
-CREATE INDEX IF NOT EXISTS idx_inc_veh    ON incomes(vehicle_id, date);
-CREATE INDEX IF NOT EXISTS idx_route_veh  ON routes(vehicle_id, start_date);
-CREATE INDEX IF NOT EXISTS idx_read_veh   ON readings(vehicle_id, date);
-`);
-  try { await db.exec("ALTER TABLE users ADD COLUMN quick_token TEXT"); } catch {}
-}
-
-async function ensureSchemaMySQL() {
+async function ensureSchema() {
   const q = async (sql) => { await _pool.query(sql); };
   await q(`CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL UNIQUE,
@@ -236,7 +113,7 @@ async function ensureSchemaMySQL() {
     ${name === 'stations' || name === 'places' ? 'address VARCHAR(255),' : ''} active TINYINT NOT NULL DEFAULT 1,
     INDEX idx_${name}_user (user_id), CONSTRAINT fk_${name}_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
-  for (const t of ['fuels','stations','places','payment_methods','expense_types','service_types','income_types','reason_types','drivers']) await simple(t);
+  for (const t of ['fuels', 'stations', 'places', 'payment_methods', 'expense_types', 'service_types', 'income_types', 'reason_types', 'drivers']) await simple(t);
 
   await q(`CREATE TABLE IF NOT EXISTS refuelings (
     id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, vehicle_id INT NOT NULL, date DATE NOT NULL, odometer DOUBLE NOT NULL,
@@ -355,9 +232,9 @@ async function seedDemoForUser(userId) {
   // simplified seed: create 2 vehicles and a few records; full demo is nice but not essential
   const ins = async (sql, ...args) => (await db.run(sql, ...args)).lastInsertRowid;
   const v1 = await ins(`INSERT INTO vehicles (user_id,name,brand,model,year,plate,fuel_type,tank_volume) VALUES (?,?,?,?,?,?,?,?)`,
-    userId,'Gol','Volkswagen','Gol 1.6 MSI',2019,'ABC1D23','Gasolina',52);
+    userId, 'Gol', 'Volkswagen', 'Gol 1.6 MSI', 2019, 'ABC1D23', 'Gasolina', 52);
   await ins(`INSERT INTO vehicles (user_id,name,brand,model,year,plate,fuel_type,tank_volume) VALUES (?,?,?,?,?,?,?,?)`,
-    userId,'Hilux','Toyota','Hilux SW4 2.8',2021,'DEF4G56','Diesel',80);
+    userId, 'Hilux', 'Toyota', 'Hilux SW4 2.8', 2021, 'DEF4G56', 'Diesel', 80);
   const fuel = await ins('INSERT INTO fuels (user_id,name) VALUES (?,?)', userId, 'Gasolina Comum');
   const station = await ins('INSERT INTO stations (user_id,name) VALUES (?,?)', userId, 'Shell Centro');
   const pm = await ins('INSERT INTO payment_methods (user_id,name) VALUES (?,?)', userId, 'Cartão');
@@ -368,20 +245,20 @@ async function seedDemoForUser(userId) {
   await ins('INSERT INTO places (user_id,name) VALUES (?,?)', userId, 'Trabalho');
 
   const today = new Date();
-  for (let i=5; i>=0; i--) {
-    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i*7);
-    const date = d.toISOString().slice(0,10);
-    const odo = 60000 + (5-i)*350;
-    const vol = 38 + i; const price = 5.79 + i*0.02; const total = Number((vol*price).toFixed(2));
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i * 7);
+    const date = d.toISOString().slice(0, 10);
+    const odo = 60000 + (5 - i) * 350;
+    const vol = 38 + i; const price = 5.79 + i * 0.02; const total = Number((vol * price).toFixed(2));
     await ins(`INSERT INTO refuelings (user_id,vehicle_id,date,odometer,price,volume,total,full_tank,fuel_id,station_id,payment_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       userId, v1, date, odo, price, vol, total, 1, fuel, station, pm);
   }
   await ins(`INSERT INTO expenses (user_id,vehicle_id,date,odometer,title,value,expense_type_id,payment_id) VALUES (?,?,?,?,?,?,?,?)`,
-    userId, v1, today.toISOString().slice(0,10), 61750, 'Pedágio', 35, 1, pm);
+    userId, v1, today.toISOString().slice(0, 10), 61750, 'Pedágio', 35, 1, pm);
   await ins(`INSERT INTO services (user_id,vehicle_id,date,odometer,title,value,service_type_id) VALUES (?,?,?,?,?,?,?)`,
-    userId, v1, today.toISOString().slice(0,10), 61500, 'Troca de óleo', 280, 1);
+    userId, v1, today.toISOString().slice(0, 10), 61500, 'Troca de óleo', 280, 1);
   await ins(`INSERT INTO reminders (user_id,vehicle_id,kind,title,due_date,repeat_days) VALUES (?,?,?,?,?,?)`,
-    userId, v1, 'date', 'Troca de óleo', new Date(today.getFullYear(), today.getMonth()+3, today.getDate()).toISOString().slice(0,10), 180);
+    userId, v1, 'date', 'Troca de óleo', new Date(today.getFullYear(), today.getMonth() + 3, today.getDate()).toISOString().slice(0, 10), 180);
 }
 
 module.exports = { db, init, createUser, verifyUser, hashPassword };

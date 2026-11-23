@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const { db, init, createUser, verifyUser } = require('./db');
 
 const PORT = Number(process.env.PORT || 3000);
-const ymExpr = (col) => db.driver === 'mysql' ? `DATE_FORMAT(${col}, '%Y-%m')` : `strftime('%Y-%m', ${col})`;
+const ymExpr = (col) => `DATE_FORMAT(${col}, '%Y-%m')`;
 const PUBLIC = path.join(__dirname, 'public');
 
 // ---------------------------------------------------------------------------
@@ -594,7 +594,7 @@ route('GET', '/api/last-odometer', async (req, res, params, body, user) => {
       UNION ALL SELECT end_odometer   AS odometer FROM routes WHERE vehicle_id = ? AND user_id = ? AND end_odometer IS NOT NULL
       UNION ALL SELECT start_odometer AS odometer FROM routes WHERE vehicle_id = ? AND user_id = ? AND start_odometer IS NOT NULL
       UNION ALL SELECT odometer FROM readings WHERE vehicle_id = ? AND user_id = ?
-    )
+    ) t
   `).get(vehicleId, user.id, vehicleId, user.id, vehicleId, user.id, vehicleId, user.id, vehicleId, user.id, vehicleId, user.id, vehicleId, user.id);
   return sendJSON(res, 200, { vehicle_id: vehicleId, odometer: row?.odometer ?? null });
 }, false);
@@ -647,16 +647,17 @@ route('GET', '/api/dashboard', async (req, res, params, body, user) => {
 
   // upcoming reminders
   const today = new Date().toISOString().slice(0, 10);
+  const plus30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const reminders = await db
     .prepare(
       `SELECT r.*, v.name AS vehicle_name FROM reminders r
          JOIN vehicles v ON v.id = r.vehicle_id
         WHERE r.user_id = ? AND r.active = 1
-          AND ((r.kind = 'date' AND r.due_date IS NOT NULL AND r.due_date <= date('now','+30 day'))
+          AND ((r.kind = 'date' AND r.due_date IS NOT NULL AND r.due_date <= ?)
             OR (r.kind = 'odometer' AND r.due_odometer IS NOT NULL AND r.due_odometer <= ?))
         ORDER BY CASE WHEN r.kind='date' THEN r.due_date ELSE '' END LIMIT 8`
     )
-    .all(user.id, (lastOdo || 0) + 500);
+    .all(user.id, plus30, (lastOdo || 0) + 500);
 
   return sendJSON(res, 200, {
     counts: { refuelings: refuelCount, expenses: expenseCount, services: serviceCount, incomes: incomeCount },
@@ -983,7 +984,7 @@ const server = http.createServer(async (req, res) => {
 
 init().then(() => {
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Carango web em http://0.0.0.0:${PORT} [db=${db.driver}]`);
+    console.log(`Carango web em http://0.0.0.0:${PORT}`);
     console.log('Conta demo: demo@carango.app / carango123');
   });
 }).catch((err) => {

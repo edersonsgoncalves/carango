@@ -9,13 +9,8 @@ COPY db.js server.js ./
 COPY public ./public
 
 ENV NODE_ENV=production \
-    PORT=3000 \
-    DB_DRIVER=sqlite \
-    DB_PATH=/app/data/carango.db
-
-RUN mkdir -p /app/data
+    PORT=3000
 
 EXPOSE 3000
-VOLUME ["/app/data"]
 
 CMD ["node", "server.js"]

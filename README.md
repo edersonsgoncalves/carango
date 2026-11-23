@@ -1,82 +1,91 @@
 # Carango Web
 
-Criação web do app **Carango - Gestor de Veículos**.
+Aplicação web do **Carango - Gestor de Veículos**.
 
-A aplicação possui os principais fluxos: dashboard, histórico, relatórios, lembretes, veículos/cadastros e formulários de abastecimento, despesa, serviço, receita, percurso e leitura de odômetro.
+Inclui dashboard, histórico, relatórios, lembretes, veículos/cadastros e formulários de abastecimento, despesa, serviço, receita, percurso e leitura de odômetro.
 
 ## Stack
 
-- **Backend:** Node.js (módulos built-in, sem dependências npm)
-- **Banco:** SQLite via `node:sqlite` (built-in do Node 22+)
+- **Backend:** Node.js + API HTTP nativa
+- **Banco:** MySQL (via `mysql2/promise`)
 - **Frontend:** SPA em HTML/CSS/JS vanilla + Chart.js (vendor local)
 - **Container:** Podman/Docker com `node:22-alpine`
 
-## Estrutura
+## Requisitos
 
-```text
-carango/
-├── db.js                 # Schema SQLite, seed demo e autenticação
-├── server.js             # Servidor HTTP + API REST + arquivos estáticos
-├── public/
-│   ├── index.html        # Shell da SPA
-│   ├── styles.css        # Estilos
-│   ├── app.js            # SPA (rotas, views, formulários, gráficos)
-│   └── vendor/
-│       └── chart.umd.js  # Chart.js
-├── test/
-│   └── e2e.js            # Teste E2E headless via CDP/Chromium
-├── Dockerfile
-└── .dockerignore
+- **Node.js 22+** (para execução sem container)
+- **MySQL 8+** acessível pela aplicação
+
+## Configuração
+
+Crie um `.env` a partir do exemplo:
+
+```bash
+cp .env.example .env
 ```
 
-## Executar com Podman
+Variáveis de ambiente:
+
+| Variável | Obrigatória | Descrição |
+|---|---:|---|
+| `MYSQL_HOST` | sim | Host do MySQL |
+| `MYSQL_PORT` | sim | Porta do MySQL |
+| `MYSQL_USER` | sim | Usuário do MySQL |
+| `MYSQL_PASSWORD` | sim | Senha do MySQL |
+| `MYSQL_DATABASE` | sim | Banco de dados |
+| `PORT` | não | Porta HTTP da aplicação (padrão `3000`) |
+
+Exemplo:
+
+```env
+MYSQL_HOST=192.168.x.x
+MYSQL_PORT=3306
+MYSQL_USER=carango
+MYSQL_PASSWORD=***
+MYSQL_DATABASE=carango
+PORT=3000
+```
+
+A aplicação valida as credenciais no startup, cria o banco se o usuário tiver permissão e cria/ajusta as tabelas automaticamente.
+
+## Executar com Docker / Podman
 
 ### Build
 
 ```bash
 cd carango
-podman build -t carango-web:1.0.0 .
+docker build -t carango:14.2.1 .
+# ou: podman build -t carango:14.2.1 .
 ```
 
-### Run (com persistência do SQLite)
+### Docker Compose (recomendado)
 
 ```bash
-mkdir -p data
-podman run -d --name carango-web --replace \
-  -p 3210:3000 \
-  -v "$(pwd)/data:/app/data:Z" \
-  localhost/carango-web:1.0.0
+cd carango
+docker compose up -d --build
+# ou: podman compose up -d --build
 ```
 
-Acesse: http://localhost:3210
+O `docker-compose.yml` publica `3210:3000` e carrega variáveis do `.env`. Não há serviço MySQL no compose; a aplicação aponta para um MySQL externo.
 
-O banco fica em `./data/carango.db` (montado em `/app/data` no container). Para reiniciar sem perder dados, use o mesmo volume.
+Acesse: `http://localhost:3210`
 
 ### Logs / parar
 
 ```bash
-podman logs -f carango-web
-podman stop carango-web
-podman rm carango-web
+docker compose logs -f --tail=100
+docker compose down
 ```
 
-## Executar sem container (desenvolvimento)
-
-Requer **Node.js 22+** (por causa do `node:sqlite`).
+## Executar sem container
 
 ```bash
 cd carango
-node server.js
-# ou porta customizada
-PORT=3210 node server.js
+npm install
+npm start
+# ou
+node --env-file=.env server.js
 ```
-
-Variáveis de ambiente:
-
-| Variável  | Padrão                 | Descrição                        |
-|-----------|------------------------|----------------------------------|
-| `PORT`    | `3000`                 | Porta HTTP                       |
-| `DB_PATH` | `./data/carango.db`     | Caminho do arquivo SQLite        |
 
 ## Conta demo
 
@@ -86,6 +95,11 @@ Ao iniciar com banco vazio, o seed cria automaticamente:
 - **Senha:** `carango123`
 
 A conta demo inclui veículos, abastecimentos, despesas, serviços, receitas, percursos e lembretes para visualização dos relatórios.
+
+## Persistência
+
+- Os dados de negócio e sessões ficam no MySQL.
+- Como o banco é externo, faça backup pelo próprio MySQL (dump/snapshot).
 
 ## Abastecimento rápido
 
@@ -105,51 +119,17 @@ curl -X POST "https://SEU_HOST/api/quick/refueling?token=SEU_TOKEN" \
 
 Campos aceitos: `vehicle_id`, `date` (YYYY-MM-DD), `odometer`, `volume`, `price`, `total`, `full_tank`, `fuel_id`, `station_id`, `notes`. Se 2 entre `volume/preço/total` forem informados, o terceiro é calculado.
 
-> WhatsApp direto exigiria integração com Meta/Twilio; o endpoint de token acima pode ser ligado a um bot/webhook de WhatsApp/Telegram/atalhos.
-
 ## Importação / exportação
 
 - **Exportar:** Configurações > Dados > Exportar CSV (abastecimentos, despesas, serviços, receitas, percursos, leituras).
-- **Importar:** Configurações > Dados > Importar abastecimentos (CSV). Colunas reconhecidas: `data/date`, `odometro/km`, `volume/litros`, `preco`, `total`, `tanque_cheio/full_tank`, `combustivel/fuel`, `posto/station`, `observacao/notes`.
-
-## Dados e persistência
-
-- **Drivers:** `DB_DRIVER=sqlite` (padrão) ou `DB_DRIVER=mysql`.
-- **SQLite:** arquivo em `DB_PATH` (padrão `./data/carango.db`). No container, monte `./data:/app/data`.
-- **MySQL:** configure `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`. A aplicação cria o banco (se o usuário tiver permissão) e as tabelas no startup.
-- Sessões de login são em memória (reinício do servidor exige novo login); dados de negócio ficam no banco.
-
-### .env (exemplo)
-
-```env
-DB_DRIVER=mysql
-MYSQL_HOST=192.168.x.x
-MYSQL_PORT=3306
-MYSQL_USER=carango
-MYSQL_PASSWORD=***
-MYSQL_DATABASE=carango
-PORT=3000
-```
+- **Importar:** Configurações > Dados > Importar CSV por tipo. A importação aceita CSV com cabeçalhos PT-BR/EN e faz auto-detecção de colunas.
 
 ## Deploy em homelab / VPS
 
-### Docker Compose (recomendado)
-
-```bash
-cd carango
-mkdir -p data
-docker compose up -d --build
-# ou: podman compose up -d --build
-```
-
-O arquivo `docker-compose.yml` publica `3210:3000` e monta `./data:/app/data`.
-
-### Produção
-
-- Coloque atrás de reverse proxy com HTTPS (Caddy/Nginx/Traefik).
-- Faça backup periódico de `./data/carango.db`.
-- Defina `PORT` e `DB_PATH` conforme ambiente.
-- Para CI/CD no GitHub (etapa seguinte): build da imagem, push para registry (GHCR/Docker Hub) e deploy via SSH/Watchtower/Compose. O Dockerfile já está pronto para isso.
+1. Configure o `.env` com o MySQL acessível pelo host/container.
+2. Suba com `docker compose up -d --build`.
+3. Coloque atrás de reverse proxy com HTTPS (Caddy/Nginx/Traefik).
+4. Libere apenas a porta necessária no firewall/security group.
 
 ## API (resumo)
 
@@ -164,7 +144,7 @@ O arquivo `docker-compose.yml` publica `3210:3000` e monta `./data:/app/data`.
 | `GET`  | `/api/history` | Histórico unificado com filtros |
 | `GET`  | `/api/reports` | Dados para gráficos/relatórios |
 | `GET`  | `/api/export.csv` | Exportação CSV |
-| `POST` | `/api/import/refuelings` | Importação CSV/JSON de abastecimentos |
+| `POST` | `/api/import/:kind` | Importação CSV/JSON por tipo |
 | `GET/POST` | `/api/quick-token` | Obter/regenerar token de abastecimento rápido |
 | `GET`  | `/api/quick/bootstrap` | Dados para quick page (token) |
 | `POST` | `/api/quick/refueling` | Criar abastecimento rápido (token) |
@@ -175,7 +155,7 @@ Recursos CRUD: `vehicles`, `fuels`, `stations`, `expense_types`, `service_types`
 
 ## Teste E2E
 
-O teste usa Chromium headless via CDP (sem dependências npm). Com o servidor rodando em `http://localhost:3210`:
+O teste usa Chromium headless via CDP (sem dependências npm). Com o servidor rodando:
 
 ```bash
 cd carango
