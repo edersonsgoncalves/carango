@@ -298,7 +298,12 @@ function router() {
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [page, param] = hash.split('/');
   const view = views[page] || views.dashboard;
-  view(param);
+  Promise.resolve(view(param)).catch((err) => {
+    console.error(err);
+    if (err?.message === 'Sessão expirada.') return;
+    const el = $('#content');
+    if (el) el.innerHTML = `<div class="card"><div class="empty"><h3>Erro ao carregar</h3><p>${esc(err.message || 'Erro inesperado')}</p><button class="btn sm" onclick="location.reload()">Recarregar</button></div></div>`;
+  });
 }
 
 window.addEventListener('hashchange', router);

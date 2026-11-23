@@ -54,18 +54,21 @@ function readBody(req) {
   });
 }
 
-// --- sessions (cookie based, in-memory) ------------------------------------
-const sessions = new Map();
-function getSession(req) {
+// --- sessions (DB-backed, survives restart) ------------------------------
+async function getSession(req) {
   const cookie = req.headers.cookie || '';
   const m = cookie.match(/(?:^|;\s*)sid=([a-f0-9]{64})/);
   if (!m) return null;
-  return sessions.get(m[1]) || null;
+  const row = await db.get('SELECT user_id FROM sessions WHERE sid = ?', m[1]);
+  return row ? row.user_id : null;
 }
-function createSession(userId) {
+async function createSession(userId) {
   const sid = crypto.randomBytes(32).toString('hex');
-  sessions.set(sid, userId);
+  await db.run('INSERT INTO sessions (sid, user_id) VALUES (?, ?)', sid, userId);
   return sid;
+}
+async function deleteSession(sid) {
+  await db.run('DELETE FROM sessions WHERE sid = ?', sid);
 }
 
 // --- date range helper used by reports -------------------------------------
@@ -171,7 +174,7 @@ route('POST', '/api/register', async (req, res, params, body) => {
   if (String(password).length < 6) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 6 caracteres.' });
   try {
     const id = await createUser(name, email, password);
-    const sid = createSession(id);
+    const sid = await createSession(id);
     res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax`);
     return sendJSON(res, 201, { id, name, email: email.toLowerCase() });
   } catch (e) {
@@ -183,7 +186,7 @@ route('POST', '/api/register', async (req, res, params, body) => {
 route('POST', '/api/login', async (req, res, params, body) => {
   const user = await verifyUser(body.email, body.password);
   if (!user) return sendJSON(res, 401, { error: 'E-mail ou senha inválidos.' });
-  const sid = createSession(user.id);
+  const sid = await createSession(user.id);
   res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax`);
   return sendJSON(res, 200, { id: user.id, name: user.name, email: user.email });
 }, false);
@@ -191,7 +194,7 @@ route('POST', '/api/login', async (req, res, params, body) => {
 route('POST', '/api/logout', async (req, res) => {
   const cookie = req.headers.cookie || '';
   const m = cookie.match(/(?:^|;\s*)sid=([a-f0-9]{64})/);
-  if (m) sessions.delete(m[1]);
+  if (m) await deleteSession(m[1]);
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
   return sendJSON(res, 200, { ok: true });
 }, false);
@@ -543,7 +546,7 @@ route('GET', '/api/readings/list', async (req, res, params, body, user) => {
 route('GET', '/api/last-odometer', async (req, res, params, body, user) => {
   const url = new URL(req.url, 'http://x');
   if (!user) user = await userByQuickToken(req, url);
-  if (!user) { const sid = getSession(req); if (sid) user = await db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(sid); }
+  if (!user) { const sid = await getSession(req); if (sid) user = await db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(sid); }
   if (!user) return sendJSON(res, 401, { error: 'Não autenticado.' });
   const vehicleId = Number(url.searchParams.get('vehicle_id') || 0);
   if (!vehicleId) return sendJSON(res, 400, { error: 'vehicle_id obrigatório.' });
@@ -906,7 +909,7 @@ const server = http.createServer(async (req, res) => {
 
     let user = null;
     if (match.auth) {
-      const userId = getSession(req);
+      const userId = await getSession(req);
       if (!userId) return sendJSON(res, 401, { error: 'Não autenticado.' });
       user = await db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(userId);
       if (!user) return sendJSON(res, 401, { error: 'Não autenticado.' });

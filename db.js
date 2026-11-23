@@ -204,6 +204,10 @@ CREATE TABLE IF NOT EXISTS reminders (
   repeat_days INTEGER, repeat_km REAL, notes TEXT, active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS sessions (
+  sid TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_refuel_veh ON refuelings(vehicle_id, date);
 CREATE INDEX IF NOT EXISTS idx_exp_veh    ON expenses(vehicle_id, date);
 CREATE INDEX IF NOT EXISTS idx_srv_veh    ON services(vehicle_id, date);
@@ -298,6 +302,13 @@ async function ensureSchemaMySQL() {
     INDEX idx_rem_user (user_id), INDEX idx_rem_veh (vehicle_id),
     CONSTRAINT fk_rem_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_rem_veh FOREIGN KEY (vehicle_id) REFERENCES vehicles(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await q(`CREATE TABLE IF NOT EXISTS sessions (
+    sid VARCHAR(64) PRIMARY KEY, user_id INT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sess_user (user_id),
+    CONSTRAINT fk_sess_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   try { await _pool.query("ALTER TABLE users ADD COLUMN quick_token VARCHAR(255)"); } catch {}
